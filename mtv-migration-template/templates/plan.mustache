@@ -1,0 +1,15 @@
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Plan
+metadata:
+  name: {{planName}}
+  namespace: {{namespace}}
+spec:
+  provider: {{sourceProvider}}
+  targetNamespace: {{targetNamespace}}
+  vms:
+  {{#selectedVmIds}}
+    - id: {{.}}
+  {{/selectedVmIds}}
+  map:
+    network: {{networkMap}}
+    storage: {{storageMap}}
