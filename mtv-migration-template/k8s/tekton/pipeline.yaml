@@ -1,0 +1,34 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: mtv-migration-pipeline
+spec:
+  params:
+    - name: backend-url
+      default: http://mtv-backend.mtv.svc.cluster.local:7007
+    - name: vm-ids
+      type: array
+    - name: target-namespace
+      default: cnv-tenant-a
+    - name: network-map
+      default: network-map-a
+    - name: storage-map
+      default: storage-map-a
+    - name: change-when
+      default: "2025-01-01T00:00:00Z"
+  results:
+    - name: jira-key
+      value: $(tasks.create-jira.results.key)
+    - name: change-id
+      value: $(tasks.create-change.results.id)
+    - name: migration-name
+      value: $(tasks.trigger-migration.results.migration)
+  tasks:
+    - name: fetch-inventory
+      taskSpec:
+        steps:
+          - name: get
+            image: curlimages/curl:8.8.0
+            script: |
+              #!/usr/bin/env sh
+              curl -s "$(params.backend-url)/api/vrops/vms" | tee /tekton/home/vms.json | jq .vms

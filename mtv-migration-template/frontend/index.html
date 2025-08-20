@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>MTV Migration Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 24px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid #ddd; padding: 16px; border-radius: 6px; }
+    button[disabled] { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h1>MTV Migration Dashboard</h1>
+
+  <div class="grid">
+    <div class="card">
+      <h3>1. Inventory (vROps)</h3>
+      <button id="loadVms">Load VMs</button>
+      <div id="vmList"></div>
+    </div>
+
+    <div class="card">
+      <h3>Target Cluster & Schedule</h3>
+      <div>
+        <label>Target Namespace:</label>
+        <input id="targetNamespace" value="cnv-tenant-a" />
+      </div>
+      <div>
+        <label>Network Map:</label>
+        <input id="networkMap" value="network-map-a" />
+      </div>
+      <div>
+        <label>Storage Map:</label>
+        <input id="storageMap" value="storage-map-a" />
+      </div>
+      <div>
+        <label>Change Window:</label>
+        <input id="changeWhen" type="datetime-local" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>2. Jira Alignment</h3>
+      <button id="createJira">Create Jira</button>
+      <div id="jiraStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>3. Helix Change</h3>
+      <button id="createCr">Create CR</button>
+      <div id="crStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>4. Notify Tenants</h3>
+      <input id="emails" placeholder="a@x.com,b@y.com" />
+      <button id="notify">Send Email</button>
+      <div id="notifyStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>5. Trigger Migration</h3>
+      <button id="trigger" disabled>Trigger</button>
+      <div id="migrationStatus"></div>
+    </div>
+  </div>
+
+  <script>
+    const state = { selectedVmIds: [], jiraKey: null, changeId: null, emailDone: false, scheduledStart: null, crApproved: false };
+    const triggerBtn = document.getElementById('trigger');
+
+    function renderGate() {
+      const when = document.getElementById('changeWhen').value;
+      const scheduleMatch = when && state.scheduledStart && new Date(when).toISOString().slice(0,16) === new Date(state.scheduledStart).toISOString().slice(0,16);
+      const can = !!state.jiraKey && !!state.changeId && state.emailDone && state.crApproved && scheduleMatch;
+      triggerBtn.disabled = !can;
+    }
+
+    async function refreshCrStatus() {
+      if (!state.changeId) return;
+      const res = await fetch(`/api/helix/changes/${state.changeId}`);
+      const data = await res.json();
+      state.crApproved = !!(data.approved || String(data.status||'').toLowerCase().includes('approved'));
+      renderGate();
+    }
+
+    setInterval(refreshCrStatus, 5000);
+
+    document.getElementById('changeWhen').addEventListener('change', renderGate);
+
+    document.getElementById('loadVms').onclick = async () => {
+      const res = await fetch('/api/vrops/vms');
+      const data = await res.json();
+      const list = data.vms || [];
+      const vmListDiv = document.getElementById('vmList');
+      vmListDiv.innerHTML = list.map(vm => `<label><input type=checkbox value="${vm.id}" /> ${vm.name} (${vm.datacenter}) - ${vm.tenant}</label><br/>`).join('');
+      vmListDiv.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        cb.addEventListener('change', () => {
+          if (cb.checked) state.selectedVmIds.push(cb.value);
+          else state.selectedVmIds = state.selectedVmIds.filter(v => v !== cb.value);
+        });
+      });
+    };
+
+    document.getElementById('createJira').onclick = async () => {
+      const res = await fetch('/api/jira/tickets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vms: state.selectedVmIds }) });
+      const data = await res.json();
+      document.getElementById('jiraStatus').innerText = JSON.stringify(data);
+      state.jiraKey = data.key;
+      renderGate();
+    };
+
+    document.getElementById('createCr').onclick = async () => {
+      const when = document.getElementById('changeWhen').value;
+      const res = await fetch('/api/helix/changes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ summary: 'VM Migration', when, jiraKey: state.jiraKey }) });
+      const data = await res.json();
+      document.getElementById('crStatus').innerText = JSON.stringify(data);
+      state.changeId = data.changeId;
+      state.scheduledStart = data.scheduledStart || when;
+      refreshCrStatus();
+    };
+
+    document.getElementById('notify').onclick = async () => {
+      const recipients = (document.getElementById('emails').value || '').split(',').map(s => s.trim()).filter(Boolean);
+      const res = await fetch('/api/notify/email', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ recipients, subject: 'Migration notice', body: 'Your VM will migrate.' }) });
+      const data = await res.json();
+      document.getElementById('notifyStatus').innerText = JSON.stringify(data);
+      state.emailDone = true;
+      renderGate();
+    };
+
+    triggerBtn.onclick = async () => {
+      const payload = {
+        selectedVmIds: state.selectedVmIds,
+        sourceProvider: 'vcenter-provider',
+        targetNamespace: document.getElementById('targetNamespace').value,
+        networkMap: document.getElementById('networkMap').value,
+        storageMap: document.getElementById('storageMap').value,
+      };
+      const res = await fetch('/api/mtv/migrate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      document.getElementById('migrationStatus').innerText = 'Triggered: ' + JSON.stringify(data);
+    };
+  </script>
+</body>
+</html>
